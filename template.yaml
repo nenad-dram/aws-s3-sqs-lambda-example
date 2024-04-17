@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  BucketName:
+    Type: String
+
+Globals:
+  Function:
+    Timeout: 20
+    MemorySize: 512
+    Runtime: java21
+    Architectures:
+      - x86_64
+
+Resources:
+  ProductBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+
+  ProductsSqsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: product-queue
+
+  ProductsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: id
+        Type: String
+      TableName: Products
+
+  ReadFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ReadFileFunction
+      Handler: com.endyary.function.ReadFileHandler::handleRequest
+      Environment:
+        Variables:
+          PRODUCT_QUEUE: !Ref ProductsSqsQueue
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref BucketName
+        - SQSSendMessagePolicy:
+              QueueName: !GetAtt ProductsSqsQueue.QueueName
+      Events:
+        FileUpload:
+          Type: S3
+          Properties:
+            Bucket: !Ref ProductBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: '.json'
+
+  SaveProductFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: SaveProductFunction
+      Handler: com.endyary.function.SaveProductHandler::handleRequest
+      Environment:
+        Variables:
+          PRODUCT_TABLE: !Ref ProductsTable
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProductsSqsQueue.Arn
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref ProductsTable
+
+  GetProductsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: GetProductsFunction
+      Handler: com.endyary.function.GetProductsHandler::handleRequest
+      Environment:
+        Variables:
+          PRODUCT_TABLE: !Ref ProductsTable
+      Events:
+        GetProductsFunction:
+          Type: Api
+          Properties:
+            Path: /products
+            Method: get
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ProductsTable
+
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/products/"
